@@ -1,12 +1,14 @@
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from unittest import TestCase
 from unittest.mock import patch
 
+import requests
 from django.test import Client, SimpleTestCase
 
 from .risk import rank_key, summarize, weather_risk
-from .services import ServiceError, build_plan, geocode_locality, hour_index, sample_route, weather_at
+from .services import ServiceError, build_plan, fetch_weather, geocode_locality, get_json, hour_index, sample_route, weather_at
 
 
 class RiskTests(TestCase):
@@ -50,6 +52,34 @@ class RiskTests(TestCase):
 
 
 class ForecastTests(TestCase):
+    @patch("planner.services.get_json")
+    def test_weather_customer_endpoint_and_public_fallback(self, get_json_mock):
+        points = [{"lat": 41.0, "lon": -87.0}]
+        get_json_mock.return_value = {"hourly": {}}
+        with patch.dict(os.environ, {"OPEN_METEO_API_KEY": "test-key"}):
+            self.assertEqual(fetch_weather(points), [{"hourly": {}}])
+            args, kwargs = get_json_mock.call_args
+            self.assertEqual(args[0], "https://customer-api.open-meteo.com/v1/forecast")
+            self.assertEqual(args[1]["apikey"], "test-key")
+            self.assertEqual(kwargs["service"], "Weather service")
+        with patch.dict(os.environ, {"OPEN_METEO_API_KEY": ""}):
+            fetch_weather(points)
+            args, _ = get_json_mock.call_args
+            self.assertEqual(args[0], "https://api.open-meteo.com/v1/forecast")
+            self.assertNotIn("apikey", args[1])
+
+    @patch("planner.services.SESSION.get")
+    def test_weather_errors_do_not_expose_urls_or_keys(self, get):
+        response = requests.Response()
+        response.status_code = 429
+        response.url = "https://example.test/forecast?apikey=secret-value"
+        get.return_value = response
+        with self.assertRaises(ServiceError) as error:
+            get_json("https://example.test/forecast", service="Weather service")
+        self.assertIn("rate-limited", str(error.exception))
+        self.assertNotIn("secret-value", str(error.exception))
+        self.assertNotIn("https://", str(error.exception))
+
     @patch("planner.services.get_json")
     def test_locality_fallback_matches_state_instead_of_guessing(self, get_json):
         get_json.return_value = {"results": [

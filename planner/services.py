@@ -25,13 +25,20 @@ class ServiceError(Exception):
     pass
 
 
-def get_json(url, params=None):
+def get_json(url, params=None, service="Upstream service"):
     try:
         response = SESSION.get(url, params=params, timeout=30)
         response.raise_for_status()
         return response.json()
-    except (requests.RequestException, ValueError) as exc:
-        raise ServiceError(f"An upstream service could not complete the request: {exc}") from exc
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        if status == 429:
+            raise ServiceError(f"{service} is temporarily rate-limited. Please try again later or contact the app administrator.") from exc
+        raise ServiceError(f"{service} returned HTTP {status or 'an error'}. Please try again later.") from exc
+    except requests.RequestException as exc:
+        raise ServiceError(f"{service} could not be reached. Please try again later.") from exc
+    except ValueError as exc:
+        raise ServiceError(f"{service} returned an invalid response.") from exc
 
 
 def geocode(query):
@@ -192,15 +199,21 @@ def sample_route(route, spacing):
 
 def fetch_weather(points):
     forecasts = []
+    api_key = os.environ.get("OPEN_METEO_API_KEY", "").strip()
+    url = ("https://customer-api.open-meteo.com/v1/forecast" if api_key
+           else "https://api.open-meteo.com/v1/forecast")
     # Multi-location requests are batched to keep URLs and responses manageable.
     for start in range(0, len(points), 40):
         batch = points[start:start + 40]
-        data = get_json("https://api.open-meteo.com/v1/forecast", {
+        params = {
             "latitude": ",".join(str(p["lat"]) for p in batch),
             "longitude": ",".join(str(p["lon"]) for p in batch),
             "hourly": "wind_gusts_10m,rain,snowfall",
             "wind_speed_unit": "mph", "timezone": "GMT", "forecast_days": 8,
-        })
+        }
+        if api_key:
+            params["apikey"] = api_key
+        data = get_json(url, params, service="Weather service")
         if isinstance(data, dict):
             data = [data]
         if len(data) != len(batch):
