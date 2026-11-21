@@ -1,7 +1,7 @@
 from django.http import FileResponse, Http404, JsonResponse
 from django.urls import path
 from django.conf import settings
-from planner.views import plan
+from planner.views import finish_plan, plan
 
 
 def index(request):
@@ -15,4 +15,4 @@ def health(request):
     return JsonResponse({"status": "ok"})
 
 
-urlpatterns = [path("", index), path("api/plan", plan), path("api/health", health)]
+urlpatterns = [path("", index), path("api/plan", plan), path("api/plan/finish", finish_plan), path("api/health", health)]

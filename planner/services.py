@@ -245,18 +245,49 @@ def weather_at(hourly, index, load):
             "risk": LEVELS[risk], "riskIndex": risk}
 
 
-def build_plan(origin_text, destination_text, departure, load, spacing, now=None):
+def prepare_plan(origin_text, destination_text, departure, load, spacing, now=None):
     now = now or datetime.now(timezone.utc)
     origin, destination = geocode(origin_text), geocode(destination_text)
     raw_routes = generate_routes(origin, destination)
     all_samples = [sample_route(route, spacing) for route in raw_routes]
-    forecasts = iter(fetch_weather([point for samples in all_samples for point in samples]))
+    return {"origin": origin, "destination": destination, "departure": departure.isoformat(),
+            "load": load, "spacing": spacing, "now": now.isoformat(),
+            "rawRoutes": [{"geometry": route["geometry"], "duration": route["duration"],
+                           "distance": route["distance"]} for route in raw_routes],
+            "samples": all_samples}
+
+
+def complete_plan(prepared, weather):
+    origin, destination = prepared["origin"], prepared["destination"]
+    departure = datetime.fromisoformat(prepared["departure"])
+    load, spacing = prepared["load"], prepared["spacing"]
+    now = datetime.fromisoformat(prepared["now"])
+    raw_routes, all_samples = prepared["rawRoutes"], prepared["samples"]
+    count = sum(len(samples) for samples in all_samples)
+    if not isinstance(weather, list) or len(weather) != count:
+        raise ServiceError("The weather service returned an incomplete forecast.")
+    forecasts = iter(weather)
     routes = []
     slider_start = now.replace(minute=0, second=0, microsecond=0)
     for index, (route, samples) in enumerate(zip(raw_routes, all_samples)):
         checkpoints = []
         for sample in samples:
-            hourly = next(forecasts)["hourly"]
+            try:
+                hourly = next(forecasts)["hourly"]
+                times = hourly["time"]
+                if not isinstance(times, list) or len(times) < 49 or len(times) > 200:
+                    raise ValueError("Invalid forecast times")
+                first = datetime.fromisoformat(times[0])
+                if first.tzinfo is not None or any(
+                    datetime.fromisoformat(value) != first + timedelta(hours=i)
+                    for i, value in enumerate(times)
+                ):
+                    raise ValueError("Invalid forecast times")
+                for key in ("wind_gusts_10m", "rain", "snowfall"):
+                    if not isinstance(hourly[key], list) or len(hourly[key]) != len(times):
+                        raise ValueError("Invalid forecast values")
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                raise ServiceError("The weather service returned an invalid hourly forecast.") from exc
             eta = departure + timedelta(seconds=sample["elapsed"])
             weather = weather_at(hourly, hour_index(hourly["time"], eta), load)
             heat = [weather_at(hourly, hour_index(hourly["time"], slider_start + timedelta(hours=h)), load)["riskIndex"]
@@ -274,3 +305,9 @@ def build_plan(origin_text, destination_text, departure, load, spacing, now=None
     return {"origin": origin, "destination": destination, "departure": departure.isoformat(),
             "load": load, "spacing": spacing, "forecastStart": slider_start.isoformat(),
             "routes": routes, "recommendedId": recommended["id"] if recommended else None}
+
+
+def build_plan(origin_text, destination_text, departure, load, spacing, now=None):
+    prepared = prepare_plan(origin_text, destination_text, departure, load, spacing, now)
+    points = [point for samples in prepared["samples"] for point in samples]
+    return complete_plan(prepared, fetch_weather(points))

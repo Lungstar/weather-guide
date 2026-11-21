@@ -5,6 +5,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 import requests
+from django.core import signing
 from django.test import Client, SimpleTestCase
 
 from .risk import rank_key, summarize, weather_risk
@@ -156,3 +157,40 @@ class ApiTests(SimpleTestCase):
                                     content_type="application/json")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(build.call_args.args[3:], (30000, 25, build.call_args.args[5]))
+
+    @patch.dict(os.environ, {"OPEN_METEO_API_KEY": ""})
+    @patch("planner.views.prepare_plan")
+    def test_browser_weather_prepare_and_finish(self, prepare):
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        route = {"geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 0]]},
+                 "distance": 16093.44, "duration": 3600}
+        sample = {"lat": 0, "lon": 0, "mile": 0, "elapsed": 0, "geometrySegment": 1}
+        end = {**sample, "mile": 10, "elapsed": 3600, "lon": 1}
+        prepare.return_value = {"origin": {"name": "A"}, "destination": {"name": "B"},
+                                "departure": now.isoformat(), "now": now.isoformat(),
+                                "load": 0, "spacing": 25, "rawRoutes": [route] * 3,
+                                "samples": [[sample, end]] * 3}
+        response = self.client.post("/api/plan", data=json.dumps({"origin": "A", "destination": "B",
+                                    "departure": datetime.now(timezone.utc).isoformat(), "load": 0,
+                                    "spacing": 25, "browserWeather": True}), content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["weatherPoints"]), 6)
+        token = response.json()["planToken"]
+        times = [(now + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M") for i in range(72)]
+        forecast = {"hourly": {"time": times, "wind_gusts_10m": [0] * 72,
+                               "rain": [0] * 72, "snowfall": [0] * 72}}
+        payload = {"planToken": token, "forecasts": [forecast] * 6}
+        response = self.client.post("/api/plan/finish", data=json.dumps(payload), content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["routes"]), 3)
+        payload["planToken"] += "tampered"
+        self.assertEqual(self.client.post("/api/plan/finish", data=json.dumps(payload),
+                                        content_type="application/json").status_code, 400)
+        payload["planToken"] = token
+        payload["forecasts"] = [forecast]
+        self.assertEqual(self.client.post("/api/plan/finish", data=json.dumps(payload),
+                                        content_type="application/json").status_code, 400)
+        payload["planToken"] = signing.dumps(prepare.return_value)
+        payload["forecasts"] = [{**forecast, "hourly": {**forecast["hourly"], "time": ["bad"] * 72}}] * 6
+        self.assertEqual(self.client.post("/api/plan/finish", data=json.dumps(payload),
+                                        content_type="application/json").status_code, 400)

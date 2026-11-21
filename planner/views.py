@@ -1,12 +1,14 @@
 import json
 import logging
 import math
+import os
 from datetime import datetime, timedelta, timezone
 
+from django.core import signing
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 
-from .services import ServiceError, build_plan
+from .services import ServiceError, build_plan, complete_plan, prepare_plan
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +38,30 @@ def plan(request):
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as exc:
         return JsonResponse({"error": str(exc) or "Invalid request."}, status=400)
     try:
-        result = build_plan(origin.strip(), destination.strip(), departure, load, spacing, now)
+        if data.get("browserWeather") is True and not os.environ.get("OPEN_METEO_API_KEY", "").strip():
+            prepared = prepare_plan(origin.strip(), destination.strip(), departure, load, spacing, now)
+            points = [{"lat": p["lat"], "lon": p["lon"]} for samples in prepared["samples"] for p in samples]
+            result = {"weatherPoints": points, "planToken": signing.dumps(prepared, compress=True)}
+        else:
+            result = build_plan(origin.strip(), destination.strip(), departure, load, spacing, now)
     except ServiceError as exc:
         logger.warning("Trip planning failed: %s", exc)
         return JsonResponse({"error": str(exc)}, status=502)
+    return JsonResponse(result)
+
+
+@require_POST
+def finish_plan(request):
+    try:
+        data = json.loads(request.body)
+        if not isinstance(data, dict) or not isinstance(data.get("planToken"), str):
+            raise ValueError("Invalid trip data.")
+        prepared = signing.loads(data["planToken"], max_age=900)
+        result = complete_plan(prepared, data.get("forecasts"))
+    except (json.JSONDecodeError, ValueError, TypeError, signing.BadSignature) as exc:
+        logger.warning("Invalid trip completion request: %s", exc)
+        return JsonResponse({"error": "Trip data is invalid or expired. Please plan the trip again."}, status=400)
+    except ServiceError as exc:
+        logger.warning("Trip completion failed: %s", exc)
+        return JsonResponse({"error": str(exc)}, status=400)
     return JsonResponse(result)

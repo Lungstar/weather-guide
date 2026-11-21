@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowRight, CalendarDays, Check, ChevronDown, Clock3, CloudSun, Compass, Gauge, Layers2, MapPin, Navigation, Route, ShieldCheck, SlidersHorizontal, Truck, Wind } from "lucide-react";
 import TripMap from "./TripMap.jsx";
 import { COLORS, LEVELS, dateTime, duration, localInputDate } from "./utils.js";
+import { fetchForecasts } from "./weather.js";
 
 function Logo() {
   return <div className="brand"><div className="brand-icon"><Navigation size={19} fill="currentColor" /></div><div>route<span>pilot</span><small>DRIVE WITH CONFIDENCE</small></div></div>;
@@ -48,10 +49,19 @@ export default function App() {
     try {
       const response = await fetch("/api/plan", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ origin, destination, departure: date.toISOString(), load: Number(load), spacing }),
+        body: JSON.stringify({ origin, destination, departure: date.toISOString(), load: Number(load), spacing, browserWeather: true }),
       });
-      const data = await response.json();
+      let data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to plan the trip.");
+      if (data.weatherPoints) {
+        const forecasts = await fetchForecasts(data.weatherPoints);
+        const finished = await fetch("/api/plan/finish", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ planToken: data.planToken, forecasts }),
+        });
+        data = await finished.json();
+        if (!finished.ok) throw new Error(data.error || "Unable to calculate weather risk.");
+      }
       setPlan(data);
       setSelectedId(data.recommendedId ?? data.routes.find((route) => route.rank === 1).id);
       setHour(0);
@@ -69,7 +79,7 @@ export default function App() {
         <div className="sidebar-inner">
           <div className="eyebrow"><span /> YOUR TRIP PLANNER</div>
           <h1>A safer way<br /><em>forward.</em></h1>
-          <p className="intro">Make the road ahead a little more predictable.</p>
+          <p className="intro">Make the road ahead a little more predictable. Checkpoint locations are sent to Open-Meteo for weather forecasts.</p>
           <form onSubmit={submit}>
             <div className="section-title"><span>01</span> YOUR JOURNEY</div>
             <div className="location-fields">
