@@ -13,6 +13,7 @@ MIDDLEWARE = [
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",
 ]
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 ROOT_URLCONF = "truckroute.urls"
 WSGI_APPLICATION = "truckroute.wsgi.application"
 STATIC_URL = "/static/"

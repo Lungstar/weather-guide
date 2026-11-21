@@ -179,6 +179,10 @@ class ApiTests(SimpleTestCase):
     def setUp(self):
         self.client = Client()
 
+    def test_referrer_policy_allows_cross_origin_map_tiles(self):
+        response = self.client.get("/api/health")
+        self.assertEqual(response.headers["Referrer-Policy"], "strict-origin-when-cross-origin")
+
     def test_invalid_requests_are_explicit(self):
         response = self.client.post("/api/plan", data=json.dumps({"origin": "", "destination": "x"}),
                                     content_type="application/json")
