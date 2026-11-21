@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: routepilot
+    runtime: docker
+    healthCheckPath: /api/health
+    envVars:
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_DEBUG
+        value: "0"
+      - key: ROUTEPILOT_USER_AGENT
+        sync: false
