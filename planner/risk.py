@@ -27,7 +27,7 @@ def summarize(checkpoints, duration_seconds, distance_miles):
         "riskMiles": miles,
         "averageRisk": weighted / distance_miles if distance_miles else 0,
         "durationSeconds": duration_seconds,
-        "distanceMiles": round(distance_miles, 1),
+        "distanceMiles": distance_miles,
     }
 
 

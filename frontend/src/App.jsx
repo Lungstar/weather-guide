@@ -18,7 +18,7 @@ function RouteCard({ route, selected, recommended, onClick }) {
   const { summary } = route;
   return <button type="button" className={`route-card ${selected ? "selected" : ""}`} onClick={onClick}>
     <div className="route-card-top"><div className="route-title"><span className="route-number">{route.id}</span><strong>Route {route.id}</strong>{recommended && <span className="recommended"><Check size={11} /> RECOMMENDED</span>}</div><RiskBadge route={route} /></div>
-    <div className="route-stats"><span><Clock3 size={15} /> <b>{duration(summary.durationSeconds)}</b></span><span><Route size={15} /> {summary.distanceMiles.toLocaleString()} mi</span><span><Gauge size={15} /> {summary.averageRisk.toFixed(2)} avg</span></div>
+    <div className="route-stats"><span><Clock3 size={15} /> <b>{duration(summary.durationSeconds)}</b></span><span><Route size={15} /> {summary.distanceMiles.toLocaleString(undefined, { maximumFractionDigits: 1 })} mi</span><span><Gauge size={15} /> {summary.averageRisk.toFixed(2)} avg</span></div>
     <div className="risk-bar">{LEVELS.map((level, index) => <span key={level} title={`${level}: ${summary.riskMiles[level]} mi`} style={{ width: `${summary.riskMiles[level] / summary.distanceMiles * 100}%`, background: COLORS[index] }} />)}</div>
     <div className="risk-breakdown">{LEVELS.map((level, index) => <span key={level}><i style={{ background: COLORS[index] }} />{level}: {summary.riskMiles[level].toFixed(1)} mi</span>)}</div>
     <div className="route-foot"><span>{summary.riskMiles.Severe + summary.riskMiles["No Travel"] > 0 ? `${(summary.riskMiles.Severe + summary.riskMiles["No Travel"]).toFixed(1)} mi severe / no travel` : "No severe conditions"}</span><span>View route <ArrowRight size={13} /></span></div>
@@ -106,6 +106,22 @@ export default function App() {
             </div>}
           </div>}
           <div className="safety-note"><ShieldCheck size={17} /><span><b>Plan smart. Drive safe.</b> Routes use a car routing profile, not truck restrictions. Verify clearances, road closures, forecasts and regulations before driving.</span></div>
+          <details className="about-panel">
+            <summary>About this app &amp; extra features <ChevronDown size={16} /></summary>
+            <div className="about-content">
+              <h2>How it works</h2>
+              <p>Nominatim finds locations, OSRM provides routes, and Open-Meteo supplies hourly weather. OpenStreetMap provides map tiles. Django calculates checkpoint risk and compares routes.</p>
+              <p>The hosted demo runs on Render. Without a customer weather key, your browser requests forecasts from Open-Meteo and sends them to Django; your IP address and checkpoint locations are shared with Open-Meteo. The free host may take time to wake up.</p>
+              <h2>Additional features</h2>
+              <ul>
+                <li><b>No Travel safeguard:</b> no route is recommended when all routes include No Travel conditions.</li>
+                <li><b>Geocoding fallback:</b> a city-level search is used if Nominatim is unavailable, with a warning to verify locations.</li>
+                <li><b>Weather layer toggle:</b> show or hide the forecast corridor independently of checkpoint conditions.</li>
+                <li><b>Risk-mile breakdown:</b> compare distance in each risk level for every route.</li>
+              </ul>
+              <p>The corridor is an interpolation between checkpoints, not a regional weather forecast. Routes do not account for truck restrictions.</p>
+            </div>
+          </details>
         </div>
       </aside>
       <section className="map-area" aria-label="Route and weather map">

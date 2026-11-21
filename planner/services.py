@@ -1,3 +1,4 @@
+import bisect
 import math
 import os
 import threading
@@ -83,7 +84,7 @@ def route_request(points, alternatives=False):
     base = os.environ.get("OSRM_URL", "https://router.project-osrm.org").rstrip("/")
     data = get_json(f"{base}/route/v1/driving/{coords}",
                     {"alternatives": "3" if alternatives else "false", "overview": "full",
-                     "geometries": "geojson", "steps": "false", "annotations": "duration"})
+                     "geometries": "geojson", "steps": "false", "annotations": "distance,duration"})
     if data.get("code") != "Ok":
         raise ServiceError(f'Routing service: {data.get("message", data.get("code", "unknown error"))}')
     return data["routes"]
@@ -98,7 +99,6 @@ def haversine(a, b):
 
 
 def point_at(coords, cumulative, target):
-    import bisect
     index = min(max(1, bisect.bisect_left(cumulative, target)), len(coords) - 1)
     span = cumulative[index] - cumulative[index - 1]
     fraction = (target - cumulative[index - 1]) / span if span else 0
@@ -168,13 +168,23 @@ def sample_route(route, spacing):
     coords = route["geometry"]["coordinates"]
     if len(coords) < 2:
         raise ServiceError("The routing service returned an invalid route geometry.")
-    cumulative = geometry_distances(coords)
-    durations = [duration for leg in route["legs"] for duration in leg["annotation"]["duration"]]
-    if len(durations) != len(coords) - 1:
-        raise ServiceError("The routing service returned inconsistent timing data.")
+    try:
+        distances = [distance for leg in route["legs"] for distance in leg["annotation"]["distance"]]
+        durations = [duration for leg in route["legs"] for duration in leg["annotation"]["duration"]]
+        if (len(distances) != len(coords) - 1 or len(durations) != len(distances)
+                or not all(math.isfinite(value) and value >= 0 for value in distances + durations)
+                or not math.isfinite(route["distance"]) or route["distance"] <= 0
+                or not math.isfinite(route["duration"]) or route["duration"] <= 0):
+            raise ValueError("Invalid route annotations")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ServiceError("The routing service returned inconsistent distance or timing data.") from exc
+    cumulative = [0.0]
     cumulative_time = [0.0]
-    for duration in durations:
+    for distance, duration in zip(distances, durations):
+        cumulative.append(cumulative[-1] + distance)
         cumulative_time.append(cumulative_time[-1] + duration)
+    if cumulative[-1] <= 0 or cumulative_time[-1] <= 0:
+        raise ServiceError("The routing service returned an empty route or timing data.")
     distance_miles = route["distance"] * MILES_PER_METER
     count = math.ceil(distance_miles / spacing) + 1
     if count > MAX_CHECKPOINTS:
@@ -185,7 +195,6 @@ def sample_route(route, spacing):
         fraction = mile / distance_miles if distance_miles else 0
         target = cumulative[-1] * fraction
         lon, lat = point_at(coords, cumulative, target)
-        import bisect
         segment = min(max(1, bisect.bisect_left(cumulative, target)), len(coords) - 1)
         span = cumulative[segment] - cumulative[segment - 1]
         part = (target - cumulative[segment - 1]) / span if span else 0
@@ -226,7 +235,7 @@ def hour_index(times, instant):
     # Open-Meteo precipitation and gusts describe the preceding hour.
     first = datetime.fromisoformat(times[0]).replace(tzinfo=timezone.utc)
     index = math.ceil((instant - first).total_seconds() / 3600)
-    if index < 0 or index >= len(times):
+    if instant < first or index >= len(times):
         raise ServiceError("The trip extends beyond the available hourly weather forecast.")
     return index
 

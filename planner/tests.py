@@ -103,6 +103,8 @@ class ForecastTests(TestCase):
         self.assertAlmostEqual(result["snowIn"], 1)
         with self.assertRaises(ServiceError):
             hour_index(times, datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc))
+        with self.assertRaises(ServiceError):
+            hour_index(times, datetime(2025, 12, 31, 23, 59, tzinfo=timezone.utc))
         hourly["rain"][1] = None
         with self.assertRaises(ServiceError):
             weather_at(hourly, 1, 0)
@@ -110,12 +112,47 @@ class ForecastTests(TestCase):
     def test_sampling_includes_end_and_uses_segment_times(self):
         route = {"geometry": {"coordinates": [[0, 0], [1, 0], [2, 0]]},
                  "distance": 160934.4, "duration": 1000,
-                 "legs": [{"annotation": {"duration": [100, 900]}}]}
+                 "legs": [{"annotation": {"distance": [80467.2, 80467.2], "duration": [100, 900]}}]}
         samples = sample_route(route, 25)
         self.assertEqual(len(samples), 5)
         self.assertAlmostEqual(samples[2]["elapsed"], 100, places=5)
         self.assertAlmostEqual(samples[-1]["elapsed"], 1000)
         self.assertAlmostEqual(samples[-1]["mile"], 100, places=3)
+
+    def test_sampling_uses_road_segment_distances_not_geometry_lengths(self):
+        route = {"geometry": {"coordinates": [[0, 0], [1, 0], [2, 0]]},
+                 "distance": 160934.4, "duration": 1000,
+                 "legs": [{"annotation": {"distance": [40233.6, 120700.8], "duration": [400, 600]}}]}
+        samples = sample_route(route, 25)
+        self.assertAlmostEqual(samples[1]["lon"], 1.0, places=4)
+        self.assertAlmostEqual(samples[1]["elapsed"], 400, places=4)
+        self.assertAlmostEqual(samples[2]["lon"], 1 + 1 / 3, places=4)
+        self.assertAlmostEqual(samples[2]["elapsed"], 600, places=4)
+        self.assertAlmostEqual(samples[-1]["lon"], 2, places=4)
+
+    def test_all_supported_spacing_intervals_include_final_partial_segment(self):
+        route = {"geometry": {"coordinates": [[0, 0], [1, 0]]},
+                 "distance": 177027.84, "duration": 3600,
+                 "legs": [{"annotation": {"distance": [177027.84], "duration": [3600]}}]}
+        for spacing, expected in ((10, 12), (25, 6), (50, 4)):
+            with self.subTest(spacing=spacing):
+                samples = sample_route(route, spacing)
+                self.assertEqual(len(samples), expected)
+                for left, right in zip(samples[:-2], samples[1:-1]):
+                    self.assertAlmostEqual(right["mile"] - left["mile"], spacing)
+                self.assertGreater(samples[-1]["mile"] - samples[-2]["mile"], 0)
+                self.assertLessEqual(samples[-1]["mile"] - samples[-2]["mile"], spacing)
+                self.assertAlmostEqual(samples[-1]["mile"], 110, places=3)
+                self.assertAlmostEqual(samples[-1]["elapsed"], 3600)
+
+    def test_sampling_rejects_missing_or_invalid_annotations(self):
+        route = {"geometry": {"coordinates": [[0, 0], [1, 0]]}, "distance": 10,
+                 "duration": 10, "legs": [{"annotation": {"duration": [10]}}]}
+        with self.assertRaises(ServiceError):
+            sample_route(route, 10)
+        route["legs"][0]["annotation"]["distance"] = [float("nan")]
+        with self.assertRaises(ServiceError):
+            sample_route(route, 10)
 
     @patch("planner.services.fetch_weather")
     @patch("planner.services.generate_routes")
@@ -124,7 +161,7 @@ class ForecastTests(TestCase):
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         route = {"geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 0]]},
                  "distance": 16093.44, "duration": 3600,
-                 "legs": [{"annotation": {"duration": [3600]}}]}
+                 "legs": [{"annotation": {"distance": [16093.44], "duration": [3600]}}]}
         generate.return_value = [route, route, route]
         times = [(now + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M") for i in range(72)]
         forecast = {"hourly": {"time": times, "wind_gusts_10m": [55] * 72,
